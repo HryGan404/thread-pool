@@ -9,7 +9,9 @@
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 class ThreadPool {
@@ -94,13 +96,17 @@ auto ThreadPool::Submit(F &&f, Args &&...arg_list)
     -> std::future<std::invoke_result_t<F, Args...>> {
   using ReturnType = std::invoke_result_t<F, Args...>;
 
-  std::function<ReturnType()> func =
-      std::bind(std::forward<F>(f), std::forward<Args>(arg_list)...);
-  auto task_ptr = std::make_shared<std::packaged_task<ReturnType()>>(func);
-  TaskFunc warpper_func = [task_ptr] { (*task_ptr)(); };
+  // Capture the callable and its arguments by value instead of going through
+  // std::bind: bind stores the arguments by value and adds one extra copy.
+  auto task_ptr = std::make_shared<std::packaged_task<ReturnType()>>(
+      [fn = std::forward<F>(f),
+       args = std::make_tuple(std::forward<Args>(arg_list)...)]() mutable {
+        return std::apply(std::move(fn), std::move(args));
+      });
+  TaskFunc wrapper_func = [task_ptr] { (*task_ptr)(); };
   {
     std::unique_lock<std::mutex> lock(task_mutex_);
-    task_queue_.push(std::move(warpper_func));
+    task_queue_.push(std::move(wrapper_func));
   }
   task_cv_.notify_one();
 

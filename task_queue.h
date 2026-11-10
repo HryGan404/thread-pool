@@ -12,9 +12,13 @@ class TaskQueue {
 
     explicit Task(TaskQueue *parent, F &&f, Args &&...arg_list)
         : parent_(parent) {
-      std::function<ReturnType()> func =
-          std::bind(std::forward<F>(f), std::forward<Args>(arg_list)...);
-      task_ptr_ = std::make_shared<std::packaged_task<ReturnType()>>(func);
+      // Capture by value rather than through std::bind, which stores the
+      // arguments by value and adds one extra copy.
+      task_ptr_ = std::make_shared<std::packaged_task<ReturnType()>>(
+          [fn = std::forward<F>(f),
+           args = std::make_tuple(std::forward<Args>(arg_list)...)]() mutable {
+            return std::apply(std::move(fn), std::move(args));
+          });
     }
 
     void operator()() noexcept {
@@ -67,7 +71,7 @@ auto TaskQueue::Enqueue(F &&f, Args &&...arg_list)
       task_running_ = true;
     }
   }
-  return std::move(future);
+  return future;
 }
 
 void TaskQueue::TaskCompleted() {
